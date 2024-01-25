@@ -6,70 +6,90 @@ namespace communication {
     radio.setTransmitSerialNumber(true);
 
     namespace betterRadio {
-        const PACKET_SIZE = 16;
+        const PACKET_SIZE = 15;
         let messageId = 0;
 
         export function sendString(message: string) {
             if (message.length === 0) {
-                const id = String.fromCharCode(messageId);
-                const index = String.fromCharCode(0);
-                const total = String.fromCharCode(1);
-                const segment = "";
+                const idByte1 = messageId >> 8;
+                const idByte2 = messageId & 0xff;
+                const index = 0;
+                const total = 1;
 
-                const emptyMessagePacket = `${id}${index}${total}${segment}`;
+                const emptyMessagePacket = Buffer.fromArray([idByte1, idByte2, index, total]);
 
-                radio.sendString(emptyMessagePacket);
-                messageId = (messageId + 1) % 256;
+                radio.sendBuffer(emptyMessagePacket);
+                messageId = (messageId + 1) % 65536;
                 return;
             }
 
-            const totalPackets = Math.ceil(message.length / PACKET_SIZE);
+            const messageBuffer = Buffer.fromUTF8(message);
 
-            const packets = [];
+            const totalPackets = Math.ceil(messageBuffer.length / PACKET_SIZE);
 
-            for (let i = 0; i < message.length; i += PACKET_SIZE) {
-                const id = String.fromCharCode(messageId);
-                const index = String.fromCharCode(i / PACKET_SIZE);
-                const total = String.fromCharCode(totalPackets);
-                const segment = message.substr(i, PACKET_SIZE);
+            const packets: Buffer[] = [];
 
-                const packet = `${id}${index}${total}${segment}`;
+            for (let i = 0; i < messageBuffer.length; i += PACKET_SIZE) {
+                const idByte1 = messageId >> 8;
+                const idByte2 = messageId & 0xff;
+                const index = i / PACKET_SIZE;
+                const total = totalPackets;
+                const segment = messageBuffer.slice(i, i + PACKET_SIZE);
+
+                const packet = Buffer.fromArray([idByte1, idByte2, index, total]).concat(segment);
                 packets.push(packet);
             }
 
             packets.forEach(function (packet) {
-                radio.sendString(packet);
+                radio.sendBuffer(packet);
             });
 
-            messageId = (messageId + 1) % 256;
+            messageId = (messageId + 1) % 65536;
         }
 
         interface ReceivedPackets {
             [senderId: number]: {
-                [messageId: number]: string[];
+                [messageId: number]: (Buffer | null)[];
             };
         }
 
         const receivedPackets: ReceivedPackets = {};
         const listeners: ((receivedString: string) => void)[] = [];
 
-        radio.onReceivedString(function (receivedString) {
+        function removeExpiredPackets(senderId: number, messageId: number) {
+            control.setInterval(
+                function () {
+                    if (receivedPackets[senderId] && receivedPackets[senderId][messageId]) {
+                        delete receivedPackets[senderId][messageId];
+                        if (Object.keys(receivedPackets[senderId]).length === 0) {
+                            delete receivedPackets[senderId];
+                        }
+                    }
+                },
+                8000,
+                control.IntervalMode.Timeout
+            );
+        }
+
+        radio.onReceivedBuffer(function (receivedBuffer) {
             const senderId = radio.receivedSerial();
-            const messageId = receivedString.charCodeAt(0);
-            const index = receivedString.charCodeAt(1);
-            const total = receivedString.charCodeAt(2);
-            const content = receivedString.substr(3);
+            const messageId = (receivedBuffer[0] << 8) | receivedBuffer[1];
+            const index = receivedBuffer[2];
+            const total = receivedBuffer[3];
+            const content = receivedBuffer.slice(4);
 
             if (!receivedPackets[senderId]) {
                 receivedPackets[senderId] = {};
             }
 
             if (!receivedPackets[senderId][messageId]) {
-                const packets = [];
+                const packets: (Buffer | null)[] = [];
                 for (let i = 0; i < total; i++) {
                     packets.push(null);
                 }
                 receivedPackets[senderId][messageId] = packets;
+
+                removeExpiredPackets(senderId, messageId);
             }
 
             receivedPackets[senderId][messageId][index] = content;
@@ -83,7 +103,8 @@ namespace communication {
             }
 
             if (isComplete) {
-                const message = receivedPackets[senderId][messageId].join("");
+                const messageBuffer = Buffer.concat(receivedPackets[senderId][messageId]);
+                const message = messageBuffer.toString();
 
                 for (const listener of listeners) {
                     listener(message);
@@ -104,6 +125,8 @@ namespace communication {
     }
 
     enum MessageType {
+        Discovery,
+        Acknowledgement,
         Direct,
         DirectEvent,
         Group,
@@ -112,52 +135,248 @@ namespace communication {
         BroadcastEvent,
     }
 
-    interface BaseMessagePacket {
-        sender: string;
+    interface DirectMessagePacket {
+        type: MessageType.Direct;
+        receiver: string;
         data: any;
     }
 
-    interface DirectMessagePacket extends BaseMessagePacket {
-        type: MessageType.Direct;
-        receiver: string;
-    }
-
     interface DirectEventMessagePacket {
-        sender: string;
         type: MessageType.DirectEvent;
         receiver: string;
         event: string;
     }
 
-    interface GroupMessagePacket extends BaseMessagePacket {
+    interface GroupMessagePacket {
         type: MessageType.Group;
         group: string;
+        data: any;
     }
 
     interface GroupEventMessagePacket {
-        sender: string;
         type: MessageType.GroupEvent;
         group: string;
         event: string;
     }
 
-    interface BroadcastMessagePacket extends BaseMessagePacket {
+    interface BroadcastMessagePacket {
         type: MessageType.Broadcast;
+        data: any;
     }
 
     interface BroadcastEventMessagePacket {
-        sender: string;
         type: MessageType.BroadcastEvent;
         event: string;
     }
 
-    type MessagePacket =
+    interface DeviceInfo {
+        deviceName: string;
+        groups: string[];
+    }
+
+    interface DiscoveryMessagePacket {
+        type: MessageType.Discovery;
+        deviceId: number;
+        additionalInfo: DeviceInfo;
+    }
+
+    interface AcknowledgementPacket {
+        type: MessageType.Acknowledgement;
+        deviceId: number;
+        receiver: string;
+        id: number;
+    }
+
+    type RegularMessagePacket =
         | DirectMessagePacket
         | DirectEventMessagePacket
         | GroupMessagePacket
         | GroupEventMessagePacket
         | BroadcastMessagePacket
         | BroadcastEventMessagePacket;
+
+    type FullRegularMessagePacket = RegularMessagePacket & {
+        id: number;
+        sender: string;
+    };
+
+    type MessagePacket = DiscoveryMessagePacket | AcknowledgementPacket | FullRegularMessagePacket;
+
+    let myDeviceName = control.deviceName();
+    const groupsJoined: string[] = [];
+
+    const DISCOVERY_INTERVAL = 5000;
+    const TIMEOUT_INTERVAL = 10000;
+    const CHECK_INTERVAL = 2500;
+    const DEVICE_ID = control.deviceSerialNumber();
+
+    interface Devices {
+        [deviceId: string]: {
+            lastSeen: number;
+            additionalInfo: DeviceInfo;
+        };
+    }
+
+    const activeDevices: Devices = {};
+
+    function sendDiscoveryMessage() {
+        const discoveryMessage: DiscoveryMessagePacket = {
+            type: MessageType.Discovery,
+            deviceId: DEVICE_ID,
+            additionalInfo: {
+                deviceName: myDeviceName,
+                groups: groupsJoined,
+            },
+        };
+
+        betterRadio.sendString(JSON.stringify(discoveryMessage));
+    }
+
+    betterRadio.onReceivedString(function (receivedString: string) {
+        const message: MessagePacket = JSON.parse(receivedString);
+        if (message.type === MessageType.Discovery) {
+            handleDiscoveryMessage(message);
+        }
+    });
+
+    function handleDiscoveryMessage(message: DiscoveryMessagePacket) {
+        const { deviceId, additionalInfo } = message;
+        activeDevices[deviceId] = {
+            lastSeen: control.millis(),
+            additionalInfo,
+        };
+    }
+
+    function removeInactiveDevices() {
+        const currentTime = control.millis();
+        const ids = Object.keys(activeDevices);
+        for (const id of ids) {
+            if (currentTime - activeDevices[id].lastSeen > TIMEOUT_INTERVAL) {
+                delete activeDevices[id];
+            }
+        }
+    }
+
+    control.setInterval(sendDiscoveryMessage, DISCOVERY_INTERVAL, control.IntervalMode.Interval);
+    control.setInterval(removeInactiveDevices, CHECK_INTERVAL, control.IntervalMode.Interval);
+
+    sendDiscoveryMessage();
+
+    const acknowledgements: { [messageId: number]: { [deviceId: string]: boolean } } = {};
+
+    function sendMessageWithAck(
+        messagePacket: FullRegularMessagePacket,
+        predicate: (additionalInfo: DeviceInfo) => boolean
+    ) {
+        const messageId = messagePacket.id;
+        const payload = JSON.stringify(messagePacket);
+        betterRadio.sendString(payload);
+
+        const devicesIds = Object.keys(activeDevices);
+
+        for (const deviceId of devicesIds) {
+            if (predicate(activeDevices[deviceId].additionalInfo)) {
+                if (!acknowledgements[messageId]) {
+                    acknowledgements[messageId] = {};
+                }
+
+                acknowledgements[messageId][deviceId] = false;
+
+                const intervalId = control.setInterval(
+                    function () {
+                        if (!acknowledgements[messageId][deviceId]) {
+                            betterRadio.sendString(payload);
+                        }
+                    },
+                    300,
+                    control.IntervalMode.Interval
+                );
+
+                control.setInterval(
+                    function () {
+                        control.clearInterval(intervalId, control.IntervalMode.Interval);
+                        delete acknowledgements[messageId][deviceId];
+                        if (Object.keys(acknowledgements[messageId]).length === 0) {
+                            delete acknowledgements[messageId];
+                        }
+                    },
+                    3000,
+                    control.IntervalMode.Timeout
+                );
+            }
+        }
+    }
+
+    betterRadio.onReceivedString(function (receivedString: string) {
+        const messagePacket: MessagePacket = JSON.parse(receivedString);
+        if (messagePacket.type === MessageType.Acknowledgement && messagePacket.receiver === myDeviceName) {
+            const messageId = messagePacket.id;
+            const deviceId = messagePacket.deviceId;
+
+            if (acknowledgements[messageId] && acknowledgements[messageId][deviceId] === false) {
+                acknowledgements[messageId][deviceId] = true;
+            }
+        }
+    });
+
+    const acknowledgedMessages: { [messageId: number]: boolean } = {};
+
+    function sendMessage(messagePacket: RegularMessagePacket) {
+        const fullMessagePacket = messagePacket as FullRegularMessagePacket;
+        fullMessagePacket.id = control.micros();
+        fullMessagePacket.sender = myDeviceName;
+
+        if (fullMessagePacket.type === MessageType.Direct || fullMessagePacket.type === MessageType.DirectEvent) {
+            const { receiver } = fullMessagePacket;
+            sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.deviceName === receiver);
+        }
+
+        if (fullMessagePacket.type === MessageType.Group || fullMessagePacket.type === MessageType.GroupEvent) {
+            const { group } = fullMessagePacket;
+            sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.groups.indexOf(group) !== -1);
+        }
+
+        if (fullMessagePacket.type === MessageType.Broadcast || fullMessagePacket.type === MessageType.BroadcastEvent) {
+            sendMessageWithAck(fullMessagePacket, () => true);
+        }
+    }
+
+    function onMessageReceived(handler: (messagePacket: FullRegularMessagePacket) => void) {
+        betterRadio.onReceivedString(function (receivedString: string) {
+            const messagePacket: MessagePacket = JSON.parse(receivedString);
+
+            if (messagePacket.type === MessageType.Discovery || messagePacket.type === MessageType.Acknowledgement) {
+                return;
+            }
+
+            const messageId = messagePacket.id;
+
+            const acknowledgementPacket: AcknowledgementPacket = {
+                id: messageId,
+                type: MessageType.Acknowledgement,
+                deviceId: DEVICE_ID,
+                receiver: messagePacket.sender,
+            };
+
+            betterRadio.sendString(JSON.stringify(acknowledgementPacket));
+
+            if (acknowledgedMessages[messageId]) {
+                return;
+            }
+
+            acknowledgedMessages[messageId] = true;
+
+            control.setInterval(
+                function () {
+                    delete acknowledgedMessages[messageId];
+                },
+                8000,
+                control.IntervalMode.Timeout
+            );
+
+            handler(messagePacket);
+        });
+    }
 
     //% block="establecer canal de comunicacion a $canal"
     //% change.defl=1
@@ -167,8 +386,6 @@ namespace communication {
     export function setChannel(canal: number) {
         radio.setGroup(canal);
     }
-
-    let myDeviceName = control.deviceName();
 
     // TODO: Consider multiple devices with the same name
 
@@ -196,11 +413,10 @@ namespace communication {
     export function sendDirectMessage(receiver: string, message: any) {
         const messagePacket: DirectMessagePacket = {
             type: MessageType.Direct,
-            sender: myDeviceName,
             data: message,
             receiver,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $mensaje directo de $emisor"
@@ -208,8 +424,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=90
     export function onDirectMessageReceived(handler: (mensaje: any, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.Direct && messagePacket.receiver === myDeviceName) {
                 handler(messagePacket.data, messagePacket.sender);
             }
@@ -222,8 +437,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=85
     export function onDirectMessageReceivedFrom(sender: string, handler: (mensaje: any) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.Direct &&
                 messagePacket.receiver === myDeviceName &&
@@ -251,11 +465,10 @@ namespace communication {
     export function sendDirectEvent(receiver: string, event: string) {
         const messagePacket: DirectEventMessagePacket = {
             type: MessageType.DirectEvent,
-            sender: myDeviceName,
             receiver,
             event,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $evento directo de $emisor"
@@ -263,8 +476,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=40
     export function onDirectEventReceived(handler: (evento: string, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.DirectEvent && messagePacket.receiver === myDeviceName) {
                 handler(messagePacket.event, messagePacket.sender);
             }
@@ -277,8 +489,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=30
     export function onDirectEventReceivedFrom(sender: string, handler: (evento: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.DirectEvent &&
                 messagePacket.receiver === myDeviceName &&
@@ -295,8 +506,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=20
     export function onDirectEventReceivedWithEvent(event: string, handler: (emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.DirectEvent &&
                 messagePacket.receiver === myDeviceName &&
@@ -314,8 +524,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=10
     export function onDirectEventReceivedFromWithEvent(sender: string, event: string, handler: () => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.DirectEvent &&
                 messagePacket.receiver === myDeviceName &&
@@ -326,9 +535,6 @@ namespace communication {
             }
         });
     }
-
-    // TODO: Consider turning this into a block
-    const groupsJoined: string[] = [];
 
     //% block="$group"
     //% blockId=group_field
@@ -372,11 +578,11 @@ namespace communication {
 
         const messagePacket: GroupMessagePacket = {
             type: MessageType.Group,
-            sender: myDeviceName,
             data: message,
             group,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $mensaje de $emisor en el grupo $group"
@@ -385,8 +591,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedMessageFromGroup(group: string, handler: (mensaje: any, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.Group &&
                 messagePacket.group === group &&
@@ -404,8 +609,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=85
     export function onReceivedMessageFromGroupFrom(group: string, sender: string, handler: (mensaje: any) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.Group &&
                 messagePacket.group === group &&
@@ -429,11 +633,11 @@ namespace communication {
 
         const messagePacket: GroupEventMessagePacket = {
             type: MessageType.GroupEvent,
-            sender: myDeviceName,
             group,
             event,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $evento de $emisor en el grupo $group"
@@ -442,8 +646,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=50
     export function onReceivedEventFromGroup(group: string, handler: (evento: string, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
@@ -461,8 +664,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=40
     export function onReceivedEventFromGroupFrom(group: string, sender: string, handler: (evento: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
@@ -481,8 +683,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=30
     export function onReceivedEventFromGroupWithEvent(group: string, event: string, handler: (emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
@@ -507,8 +708,7 @@ namespace communication {
         event: string,
         handler: () => void
     ) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
@@ -528,10 +728,10 @@ namespace communication {
     export function broadcastMessage(message: any) {
         const messagePacket: BroadcastMessagePacket = {
             type: MessageType.Broadcast,
-            sender: myDeviceName,
             data: message,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $mensaje de $emisor por difusion"
@@ -539,8 +739,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedBroadcast(handler: (mensaje: string, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.Broadcast) {
                 handler(messagePacket.data, messagePacket.sender);
             }
@@ -553,8 +752,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=85
     export function onReceivedBroadcastFrom(sender: string, handler: (mensaje: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.Broadcast &&
                 messagePacket.sender === sender &&
@@ -572,10 +770,10 @@ namespace communication {
     export function broadcastEvent(event: string) {
         const messagePacket: BroadcastEventMessagePacket = {
             type: MessageType.BroadcastEvent,
-            sender: myDeviceName,
             event,
         };
-        betterRadio.sendString(JSON.stringify(messagePacket));
+
+        sendMessage(messagePacket);
     }
 
     //% block="al recibir un $evento de difusion de $emisor"
@@ -583,8 +781,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=50
     export function onReceivedEventBroadcast(handler: (evento: string, emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.BroadcastEvent) {
                 handler(messagePacket.event, messagePacket.sender);
             }
@@ -597,8 +794,7 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=40
     export function onReceivedEventBroadcastFrom(sender: string, handler: (evento: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.BroadcastEvent && messagePacket.sender === sender) {
                 handler(messagePacket.event);
             }
@@ -611,23 +807,21 @@ namespace communication {
     //% draggableParameters="reporter"
     //% weight=30
     export function onReceivedEventBroadcastWithEvent(event: string, handler: (emisor: string) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.BroadcastEvent && messagePacket.event === event) {
                 handler(messagePacket.sender);
             }
         });
     }
 
-    //% block="al recibir el evento $event directo de $sender"
+    //% block="al recibir el evento $event difusion de $sender"
     //% sender.shadow=device_field
     //% event.shadow=event_field
     //% group="Eventos de Difusion"
     //% draggableParameters="reporter"
     //% weight=20
     export function onReceivedEventBroadcastFromWithEvent(sender: string, event: string, handler: () => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.BroadcastEvent &&
                 messagePacket.sender === sender &&
