@@ -127,12 +127,18 @@ namespace communication {
     enum MessageType {
         Discovery,
         Acknowledgement,
+        Barrier,
         Direct,
         DirectEvent,
         Group,
         GroupEvent,
         Broadcast,
         BroadcastEvent,
+    }
+
+    interface BarrierPacket {
+        type: MessageType.Barrier;
+        barrierId: string;
     }
 
     interface DirectMessagePacket {
@@ -188,6 +194,7 @@ namespace communication {
     }
 
     type RegularMessagePacket =
+        | BarrierPacket
         | DirectMessagePacket
         | DirectEventMessagePacket
         | GroupMessagePacket
@@ -336,7 +343,11 @@ namespace communication {
             sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.groups.indexOf(group) !== -1);
         }
 
-        if (fullMessagePacket.type === MessageType.Broadcast || fullMessagePacket.type === MessageType.BroadcastEvent) {
+        if (
+            fullMessagePacket.type === MessageType.Barrier ||
+            fullMessagePacket.type === MessageType.Broadcast ||
+            fullMessagePacket.type === MessageType.BroadcastEvent
+        ) {
             sendMessageWithAck(fullMessagePacket, () => true);
         }
     }
@@ -403,6 +414,128 @@ namespace communication {
     //% device.fieldOptions.key="devices"
     export function _deviceField(device: string) {
         return device;
+    }
+
+    // Sincronizacion
+
+    //% block="esperar por $numberOfDevices dispositivos"
+    //% numberOfDevices.defl=2
+    //% group="Sincronizacion"
+    //% weight=100
+    export function waitForDevices(numberOfDevices: number) {
+        while (true) {
+            if (Object.keys(activeDevices).length + 1 >= numberOfDevices) {
+                return;
+            }
+            basic.pause(100);
+        }
+    }
+
+    //% block="esperar por $deviceName"
+    //% deviceName.shadow=device_field deviceName.defl="nombre"
+    //% group="Sincronizacion"
+    //% weight=90
+    export function waitForDevice(deviceName: string) {
+        const devicesIds = Object.keys(activeDevices);
+        while (true) {
+            for (const deviceId of devicesIds) {
+                if (activeDevices[deviceId].additionalInfo.deviceName === deviceName) {
+                    return;
+                }
+            }
+            basic.pause(100);
+        }
+    }
+
+    //% block="esperar por $numberOfDevices dispositivos en el grupo $group"
+    //% numberOfDevices.defl=2
+    //% group.shadow=group_field group.defl="grupo"
+    //% group="Sincronizacion"
+    //% weight=80
+    export function waitForDevicesInGroup(numberOfDevices: number, group: string) {
+        if (groupsJoined.indexOf(group) === -1) {
+            return;
+        }
+
+        while (true) {
+            let count = 1;
+            const devicesIds = Object.keys(activeDevices);
+            for (const deviceId of devicesIds) {
+                if (activeDevices[deviceId].additionalInfo.groups.indexOf(group) !== -1) {
+                    count++;
+                }
+            }
+            if (count >= numberOfDevices) {
+                return;
+            }
+            basic.pause(100);
+        }
+    }
+
+    // Global state to track the count of devices that have reached each barrier
+    const barrierCounts: { [barrierId: string]: number } = {};
+
+    // Start listening for barrier messages immediately
+    // onMessageReceived(function (receivedString: string) {
+    //     const message = JSON.parse(receivedString);
+    //     if (message.type === "barrier") {
+    //         const barrierId = message.barrierId;
+    //         if (!barrierCounts[barrierId]) {
+    //             barrierCounts[barrierId] = 1; // Initialize with 1 for the sender itself
+    //         } else {
+    //             barrierCounts[barrierId]++;
+    //         }
+    //     }
+    // });
+
+    onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+        if (messagePacket.type === MessageType.Barrier) {
+            const { barrierId } = messagePacket;
+            if (!barrierCounts[barrierId]) {
+                barrierCounts[barrierId] = 1; // Initialize with 1 for the sender itself
+            } else {
+                barrierCounts[barrierId]++;
+            }
+        }
+    });
+
+    // Synchronization barrier function with self-inclusion and final device delay
+    //% block="esperar por $numberOfDevices dispositivos en la barrera $barrierId"
+    //% numberOfDevices.defl=2
+    //% barrierId.defl="barrier1"
+    //% group="Sincronizacion"
+    //% weight=70
+    export function synchronizationBarrier(numberOfDevices: number, barrierId: string) {
+        // Ensure this device is counted as having reached the barrier
+        if (!barrierCounts[barrierId]) {
+            barrierCounts[barrierId] = 1; // Initialize with 1 for this device
+        } else {
+            // If others have reached the barrier first, make sure to include this device
+            barrierCounts[barrierId]++;
+        }
+
+        // Broadcast barrier message to indicate this device has reached the barrier
+        const messagePacket: BarrierPacket = {
+            type: MessageType.Barrier,
+            barrierId,
+        };
+
+        sendMessage(messagePacket);
+
+        const isLastDevice = barrierCounts[barrierId] === numberOfDevices;
+
+        // Wait until the required number of devices have reached the barrier
+        while (barrierCounts[barrierId] < numberOfDevices) {
+            basic.pause(100); // Check every 100ms
+        }
+
+        // If this device is the last to reach the barrier, wait an additional 100ms
+        if (isLastDevice) {
+            basic.pause(100);
+        }
+
+        // Free up the barrier for future use
+        delete barrierCounts[barrierId];
     }
 
     //% block="enviar mensaje $message a $receiver"
