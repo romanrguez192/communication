@@ -127,17 +127,34 @@ namespace communication {
     enum MessageType {
         Discovery,
         Acknowledgement,
-        Barrier,
+        BarrierDirect,
+        BarrierGroup,
+        BarrierBroadcast,
         Direct,
+        DirectValue,
         DirectEvent,
         Group,
+        GroupValue,
         GroupEvent,
         Broadcast,
+        BroadcastValue,
         BroadcastEvent,
     }
 
-    interface BarrierPacket {
-        type: MessageType.Barrier;
+    interface BarrierDirectPacket {
+        type: MessageType.BarrierDirect;
+        barrierId: string;
+        receiver: string;
+    }
+
+    interface BarrierGroupPacket {
+        type: MessageType.BarrierGroup;
+        barrierId: string;
+        group: string;
+    }
+
+    interface BarrierBroadcastPacket {
+        type: MessageType.BarrierBroadcast;
         barrierId: string;
     }
 
@@ -145,6 +162,13 @@ namespace communication {
         type: MessageType.Direct;
         receiver: string;
         data: any;
+    }
+
+    interface DirectValueMessagePacket {
+        type: MessageType.DirectValue;
+        receiver: string;
+        key: string;
+        value: any;
     }
 
     interface DirectEventMessagePacket {
@@ -159,6 +183,13 @@ namespace communication {
         data: any;
     }
 
+    interface GroupValueMessagePacket {
+        type: MessageType.GroupValue;
+        group: string;
+        key: string;
+        value: any;
+    }
+
     interface GroupEventMessagePacket {
         type: MessageType.GroupEvent;
         group: string;
@@ -168,6 +199,12 @@ namespace communication {
     interface BroadcastMessagePacket {
         type: MessageType.Broadcast;
         data: any;
+    }
+
+    interface BroadcastValueMessagePacket {
+        type: MessageType.BroadcastValue;
+        key: string;
+        value: any;
     }
 
     interface BroadcastEventMessagePacket {
@@ -194,12 +231,17 @@ namespace communication {
     }
 
     type RegularMessagePacket =
-        | BarrierPacket
+        | BarrierDirectPacket
+        | BarrierGroupPacket
+        | BarrierBroadcastPacket
         | DirectMessagePacket
+        | DirectValueMessagePacket
         | DirectEventMessagePacket
         | GroupMessagePacket
+        | GroupValueMessagePacket
         | GroupEventMessagePacket
         | BroadcastMessagePacket
+        | BroadcastValueMessagePacket
         | BroadcastEventMessagePacket;
 
     type FullRegularMessagePacket = RegularMessagePacket & {
@@ -333,19 +375,30 @@ namespace communication {
         fullMessagePacket.id = control.micros();
         fullMessagePacket.sender = myDeviceName;
 
-        if (fullMessagePacket.type === MessageType.Direct || fullMessagePacket.type === MessageType.DirectEvent) {
+        if (
+            fullMessagePacket.type === MessageType.BarrierDirect ||
+            fullMessagePacket.type === MessageType.Direct ||
+            fullMessagePacket.type === MessageType.DirectValue ||
+            fullMessagePacket.type === MessageType.DirectEvent
+        ) {
             const { receiver } = fullMessagePacket;
             sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.deviceName === receiver);
         }
 
-        if (fullMessagePacket.type === MessageType.Group || fullMessagePacket.type === MessageType.GroupEvent) {
+        if (
+            fullMessagePacket.type === MessageType.BarrierGroup ||
+            fullMessagePacket.type === MessageType.Group ||
+            fullMessagePacket.type === MessageType.GroupValue ||
+            fullMessagePacket.type === MessageType.GroupEvent
+        ) {
             const { group } = fullMessagePacket;
             sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.groups.indexOf(group) !== -1);
         }
 
         if (
-            fullMessagePacket.type === MessageType.Barrier ||
+            fullMessagePacket.type === MessageType.BarrierBroadcast ||
             fullMessagePacket.type === MessageType.Broadcast ||
+            fullMessagePacket.type === MessageType.BroadcastValue ||
             fullMessagePacket.type === MessageType.BroadcastEvent
         ) {
             sendMessageWithAck(fullMessagePacket, () => true);
@@ -389,6 +442,8 @@ namespace communication {
         });
     }
 
+    // TODO: Consider removing this block and channels in general
+
     //% block="establecer canal de comunicacion a $canal"
     //% change.defl=1
     //% canal.min=0 canal.max=255
@@ -405,6 +460,39 @@ namespace communication {
     //% weight=100
     export function registerDevice(name: string) {
         myDeviceName = name;
+        sendDiscoveryMessage();
+    }
+
+    //% block="$group"
+    //% blockId=group_field
+    //% blockHidden=true shim=TD_ID
+    //% group.fieldEditor="autocomplete" group.fieldOptions.decompileLiterals=true
+    //% group.fieldOptions.key="groups"
+    export function _groupField(group: string) {
+        return group;
+    }
+
+    //% block="unirse al grupo $group"
+    //% group.shadow=group_field
+    //% group="Configuracion"
+    //% weight=90
+    export function joinGroup(group: string) {
+        if (groupsJoined.indexOf(group) === -1) {
+            groupsJoined.push(group);
+            sendDiscoveryMessage();
+        }
+    }
+
+    //% block="salir del grupo $group"
+    //% group.shadow=group_field
+    //% group="Configuracion"
+    //% weight=80
+    export function leaveGroup(group: string) {
+        const index = groupsJoined.indexOf(group);
+        if (index !== -1) {
+            groupsJoined.splice(index, 1);
+            sendDiscoveryMessage();
+        }
     }
 
     //% block="$device"
@@ -416,9 +504,7 @@ namespace communication {
         return device;
     }
 
-    // Sincronizacion
-
-    //% block="esperar por $numberOfDevices dispositivos"
+    //% block="esperar por $numberOfDevices dispositivos conectados"
     //% numberOfDevices.defl=2
     //% group="Sincronizacion"
     //% weight=100
@@ -431,7 +517,7 @@ namespace communication {
         }
     }
 
-    //% block="esperar por $deviceName"
+    //% block="esperar por $deviceName conectado"
     //% deviceName.shadow=device_field deviceName.defl="nombre"
     //% group="Sincronizacion"
     //% weight=90
@@ -447,7 +533,7 @@ namespace communication {
         }
     }
 
-    //% block="esperar por $numberOfDevices dispositivos en el grupo $group"
+    //% block="esperar por $numberOfDevices dispositivos conectados en el grupo $group"
     //% numberOfDevices.defl=2
     //% group.shadow=group_field group.defl="grupo"
     //% group="Sincronizacion"
@@ -472,70 +558,137 @@ namespace communication {
         }
     }
 
-    // Global state to track the count of devices that have reached each barrier
-    const barrierCounts: { [barrierId: string]: number } = {};
-
-    // Start listening for barrier messages immediately
-    // onMessageReceived(function (receivedString: string) {
-    //     const message = JSON.parse(receivedString);
-    //     if (message.type === "barrier") {
-    //         const barrierId = message.barrierId;
-    //         if (!barrierCounts[barrierId]) {
-    //             barrierCounts[barrierId] = 1; // Initialize with 1 for the sender itself
-    //         } else {
-    //             barrierCounts[barrierId]++;
-    //         }
-    //     }
-    // });
+    const barrierReached: { [barrierId: string]: string[] } = {};
 
     onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-        if (messagePacket.type === MessageType.Barrier) {
-            const { barrierId } = messagePacket;
-            if (!barrierCounts[barrierId]) {
-                barrierCounts[barrierId] = 1; // Initialize with 1 for the sender itself
-            } else {
-                barrierCounts[barrierId]++;
+        if (
+            (messagePacket.type === MessageType.BarrierDirect && messagePacket.receiver === myDeviceName) ||
+            (messagePacket.type === MessageType.BarrierGroup && groupsJoined.indexOf(messagePacket.group) !== -1) ||
+            messagePacket.type === MessageType.BarrierBroadcast
+        ) {
+            const { barrierId, sender } = messagePacket;
+            if (!barrierReached[barrierId]) {
+                barrierReached[barrierId] = [sender];
+            } else if (barrierReached[barrierId].indexOf(sender) === -1) {
+                barrierReached[barrierId].push(sender);
             }
         }
     });
 
-    // Synchronization barrier function with self-inclusion and final device delay
-    //% block="esperar por $numberOfDevices dispositivos en la barrera $barrierId"
-    //% numberOfDevices.defl=2
-    //% barrierId.defl="barrier1"
+    //% block="esperar por $deviceName en el punto de encuentro $barrierId"
+    //% deviceName.shadow=device_field deviceName.defl="nombre"
+    //% barrierId.defl="reunion1"
     //% group="Sincronizacion"
     //% weight=70
-    export function synchronizationBarrier(numberOfDevices: number, barrierId: string) {
-        // Ensure this device is counted as having reached the barrier
-        if (!barrierCounts[barrierId]) {
-            barrierCounts[barrierId] = 1; // Initialize with 1 for this device
-        } else {
-            // If others have reached the barrier first, make sure to include this device
-            barrierCounts[barrierId]++;
+    export function synchronizationBarrierDirect(deviceName: string, barrierId: string) {
+        if (!barrierReached[barrierId]) {
+            barrierReached[barrierId] = [myDeviceName];
+        } else if (barrierReached[barrierId].indexOf(myDeviceName) === -1) {
+            barrierReached[barrierId].push(myDeviceName);
         }
 
-        // Broadcast barrier message to indicate this device has reached the barrier
-        const messagePacket: BarrierPacket = {
-            type: MessageType.Barrier,
+        const messagePacket: BarrierDirectPacket = {
+            type: MessageType.BarrierDirect,
+            receiver: deviceName,
             barrierId,
         };
 
         sendMessage(messagePacket);
 
-        const isLastDevice = barrierCounts[barrierId] === numberOfDevices;
+        const isLastDevice = barrierReached[barrierId].indexOf(deviceName) !== -1;
 
-        // Wait until the required number of devices have reached the barrier
-        while (barrierCounts[barrierId] < numberOfDevices) {
-            basic.pause(100); // Check every 100ms
+        while (barrierReached[barrierId].indexOf(deviceName) === -1) {
+            basic.pause(100);
         }
 
-        // If this device is the last to reach the barrier, wait an additional 100ms
         if (isLastDevice) {
             basic.pause(100);
         }
 
-        // Free up the barrier for future use
-        delete barrierCounts[barrierId];
+        delete barrierReached[barrierId];
+    }
+
+    //% block="esperar por el grupo $group en el punto de encuentro $barrierId"
+    //% group.shadow=group_field group.defl="grupo"
+    //% barrierId.defl="reunion2"
+    //% group="Sincronizacion"
+    //% weight=60
+    export function synchronizationBarrierGroup(group: string, barrierId: string) {
+        if (groupsJoined.indexOf(group) === -1) {
+            return;
+        }
+
+        if (!barrierReached[barrierId]) {
+            barrierReached[barrierId] = [myDeviceName];
+        } else if (barrierReached[barrierId].indexOf(myDeviceName) === -1) {
+            barrierReached[barrierId].push(myDeviceName);
+        }
+
+        const messagePacket: BarrierGroupPacket = {
+            type: MessageType.BarrierGroup,
+            group,
+            barrierId,
+        };
+
+        sendMessage(messagePacket);
+
+        const groupCount = Object.keys(activeDevices).filter(
+            (deviceId) => activeDevices[deviceId].additionalInfo.groups.indexOf(group) !== -1
+        ).length;
+
+        const isLastDevice = barrierReached[barrierId].length === groupCount;
+
+        while (true) {
+            const groupCount =
+                Object.keys(activeDevices).filter(
+                    (deviceId) => activeDevices[deviceId].additionalInfo.groups.indexOf(group) !== -1
+                ).length + 1;
+
+            if (barrierReached[barrierId].length === groupCount) {
+                break;
+            }
+
+            basic.pause(100);
+        }
+
+        if (isLastDevice) {
+            basic.pause(100);
+        }
+
+        delete barrierReached[barrierId];
+    }
+
+    //% block="esperar por todos en el punto de encuentro $barrierId"
+    //% barrierId.defl="reunion3"
+    //% group="Sincronizacion"
+    //% weight=50
+    export function synchronizationBarrierBroadcast(barrierId: string) {
+        if (!barrierReached[barrierId]) {
+            barrierReached[barrierId] = [myDeviceName];
+        } else if (barrierReached[barrierId].indexOf(myDeviceName) === -1) {
+            barrierReached[barrierId].push(myDeviceName);
+        }
+
+        const messagePacket: BarrierBroadcastPacket = {
+            type: MessageType.BarrierBroadcast,
+            barrierId,
+        };
+
+        sendMessage(messagePacket);
+
+        const devicesCount = Object.keys(activeDevices).length + 1;
+
+        const isLastDevice = barrierReached[barrierId].length === devicesCount;
+
+        while (barrierReached[barrierId].length < devicesCount) {
+            basic.pause(100);
+        }
+
+        if (isLastDevice) {
+            basic.pause(100);
+        }
+
+        delete barrierReached[barrierId];
     }
 
     //% block="enviar mensaje $message a $receiver"
@@ -581,6 +734,58 @@ namespace communication {
         });
     }
 
+    //% block="enviar valor $key = $value a $receiver"
+    //% key.defl="nombre"
+    //% value.shadow=math_number
+    //% receiver.shadow=device_field
+    //% group="Valores Directos"
+    //% weight=100
+    export function sendDirectValue(receiver: string, key: string, value: any) {
+        const messagePacket: DirectValueMessagePacket = {
+            type: MessageType.DirectValue,
+            receiver,
+            key,
+            value,
+        };
+        sendMessage(messagePacket);
+    }
+
+    //% block="al recibir $key de $emisor con $valor"
+    //% key.defl="nombre"
+    //% group="Valores Directos"
+    //% draggableParameters="reporter"
+    //% weight=90
+    export function onDirectValueReceived(key: string, handler: (valor: any, emisor: string) => void) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.DirectValue &&
+                messagePacket.receiver === myDeviceName &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.value, messagePacket.sender);
+            }
+        });
+    }
+
+    //% block="al recibir $key de $sender con $valor"
+    //% key.defl="nombre"
+    //% sender.shadow=device_field
+    //% group="Valores Directos"
+    //% draggableParameters="reporter"
+    //% weight=80
+    export function onDirectValueReceivedFrom(sender: string, key: string, handler: (valor: any) => void) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.DirectValue &&
+                messagePacket.receiver === myDeviceName &&
+                messagePacket.sender === sender &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.value);
+            }
+        });
+    }
+
     //% block="$event"
     //% blockId=event_field
     //% blockHidden=true shim=TD_ID
@@ -602,35 +807,6 @@ namespace communication {
             event,
         };
         sendMessage(messagePacket);
-    }
-
-    //% block="al recibir un $evento directo de $emisor"
-    //% group="Eventos Directos"
-    //% draggableParameters="reporter"
-    //% weight=40
-    export function onDirectEventReceived(handler: (evento: string, emisor: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (messagePacket.type === MessageType.DirectEvent && messagePacket.receiver === myDeviceName) {
-                handler(messagePacket.event, messagePacket.sender);
-            }
-        });
-    }
-
-    //% block="al recibir un $evento directo de $sender"
-    //% sender.shadow=device_field
-    //% group="Eventos Directos"
-    //% draggableParameters="reporter"
-    //% weight=30
-    export function onDirectEventReceivedFrom(sender: string, handler: (evento: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.DirectEvent &&
-                messagePacket.receiver === myDeviceName &&
-                messagePacket.sender === sender
-            ) {
-                handler(messagePacket.event);
-            }
-        });
     }
 
     //% block="al recibir el evento $event directo de $emisor"
@@ -667,36 +843,6 @@ namespace communication {
                 handler();
             }
         });
-    }
-
-    //% block="$group"
-    //% blockId=group_field
-    //% blockHidden=true shim=TD_ID
-    //% group.fieldEditor="autocomplete" group.fieldOptions.decompileLiterals=true
-    //% group.fieldOptions.key="groups"
-    export function _groupField(group: string) {
-        return group;
-    }
-
-    //% block="unirse al grupo $group"
-    //% group.shadow=group_field
-    //% group="Mensajes de Grupo"
-    //% weight=120
-    export function joinGroup(group: string) {
-        if (groupsJoined.indexOf(group) === -1) {
-            groupsJoined.push(group);
-        }
-    }
-
-    //% block="salir del grupo $group"
-    //% group.shadow=group_field
-    //% group="Mensajes de Grupo"
-    //% weight=110
-    export function leaveGroup(group: string) {
-        const index = groupsJoined.indexOf(group);
-        if (index !== -1) {
-            groupsJoined.splice(index, 1);
-        }
     }
 
     //% block="enviar mensaje $message al grupo $group"
@@ -754,6 +900,76 @@ namespace communication {
         });
     }
 
+    //% block="enviar valor $key = $value al grupo $group"
+    //% key.defl="nombre"
+    //% value.shadow=math_number
+    //% group.shadow=group_field
+    //% group="Valores de Grupo"
+    //% weight=100
+    export function sendValueToGroup(group: string, key: string, value: any) {
+        if (groupsJoined.indexOf(group) === -1) {
+            return;
+        }
+
+        const messagePacket: GroupValueMessagePacket = {
+            type: MessageType.GroupValue,
+            group,
+            key,
+            value,
+        };
+
+        sendMessage(messagePacket);
+    }
+
+    //% block="al recibir $key de $emisor en el grupo $group con $valor"
+    //% key.defl="nombre"
+    //% group.shadow=group_field
+    //% group="Valores de Grupo"
+    //% draggableParameters="reporter"
+    //% weight=90
+    export function onReceivedValueFromGroup(
+        group: string,
+        key: string,
+        handler: (valor: any, emisor: string) => void
+    ) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.GroupValue &&
+                messagePacket.group === group &&
+                groupsJoined.indexOf(group) !== -1 &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.value, messagePacket.sender);
+            }
+        });
+    }
+
+    //% block="al recibir $key de $sender en el grupo $group con $valor"
+    //% key.defl="nombre"
+    //% sender.shadow=device_field
+    //% group.shadow=group_field
+    //% group="Valores de Grupo"
+    //% draggableParameters="reporter"
+    //% weight=80
+    export function onReceivedValueFromGroupFrom(
+        group: string,
+        sender: string,
+        key: string,
+        handler: (valor: any) => void
+    ) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.GroupValue &&
+                messagePacket.group === group &&
+                groupsJoined.indexOf(group) !== -1 &&
+                messagePacket.sender === sender &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.value);
+            }
+        });
+    }
+
     //% block="enviar evento $event al grupo $group"
     //% event.defl="evento"
     //% group.shadow=group_field
@@ -771,42 +987,6 @@ namespace communication {
         };
 
         sendMessage(messagePacket);
-    }
-
-    //% block="al recibir un $evento de $emisor en el grupo $group"
-    //% group.shadow=group_field
-    //% group="Eventos de Grupo"
-    //% draggableParameters="reporter"
-    //% weight=50
-    export function onReceivedEventFromGroup(group: string, handler: (evento: string, emisor: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.GroupEvent &&
-                messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1
-            ) {
-                handler(messagePacket.event, messagePacket.sender);
-            }
-        });
-    }
-
-    //% block="al recibir un $evento de $sender en el grupo $group"
-    //% sender.shadow=device_field
-    //% group.shadow=group_field
-    //% group="Eventos de Grupo"
-    //% draggableParameters="reporter"
-    //% weight=40
-    export function onReceivedEventFromGroupFrom(group: string, sender: string, handler: (evento: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.GroupEvent &&
-                messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
-                messagePacket.sender === sender
-            ) {
-                handler(messagePacket.event);
-            }
-        });
     }
 
     //% block="al recibir el evento $event de $emisor en el grupo $group"
@@ -856,7 +1036,7 @@ namespace communication {
 
     //% block="enviar mensaje $message por difusion"
     //% message.shadow=text message.defl="hola"
-    //% group="Mensajes de Difusion"
+    //% group="Mensajes por Difusion"
     //% weight=100
     export function broadcastMessage(message: any) {
         const messagePacket: BroadcastMessagePacket = {
@@ -868,7 +1048,7 @@ namespace communication {
     }
 
     //% block="al recibir un $mensaje de $emisor por difusion"
-    //% group="Mensajes de Difusion"
+    //% group="Mensajes por Difusion"
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedBroadcast(handler: (mensaje: string, emisor: string) => void) {
@@ -881,7 +1061,7 @@ namespace communication {
 
     //% block="al recibir un $mensaje de $sender por difusion"
     //% sender.shadow=device_field
-    //% group="Mensajes de Difusion"
+    //% group="Mensajes por Difusion"
     //% draggableParameters="reporter"
     //% weight=85
     export function onReceivedBroadcastFrom(sender: string, handler: (mensaje: string) => void) {
@@ -896,9 +1076,55 @@ namespace communication {
         });
     }
 
+    //% block="enviar valor $key = $value por difusion"
+    //% key.defl="nombre"
+    //% value.shadow=math_number
+    //% group="Valores por Difusion"
+    //% weight=100
+    export function broadcastValue(key: string, value: any) {
+        const messagePacket: BroadcastValueMessagePacket = {
+            type: MessageType.BroadcastValue,
+            key,
+            value,
+        };
+
+        sendMessage(messagePacket);
+    }
+
+    //% block="al recibir $key de $emisor por difusion con $valor"
+    //% key.defl="nombre"
+    //% group="Valores por Difusion"
+    //% draggableParameters="reporter"
+    //% weight=90
+    export function onReceivedValueBroadcast(key: string, handler: (valor: any, emisor: string) => void) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (messagePacket.type === MessageType.BroadcastValue && messagePacket.key === key) {
+                handler(messagePacket.value, messagePacket.sender);
+            }
+        });
+    }
+
+    //% block="al recibir $key de $sender por difusion con $valor"
+    //% key.defl="nombre"
+    //% sender.shadow=device_field
+    //% group="Valores por Difusion"
+    //% draggableParameters="reporter"
+    //% weight=80
+    export function onReceivedValueBroadcastFrom(sender: string, key: string, handler: (valor: any) => void) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.BroadcastValue &&
+                messagePacket.sender === sender &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.value);
+            }
+        });
+    }
+
     //% block="enviar evento $event por difusion"
     //% event.defl="evento"
-    //% group="Eventos de Difusion"
+    //% group="Eventos por Difusion"
     //% weight=60
     export function broadcastEvent(event: string) {
         const messagePacket: BroadcastEventMessagePacket = {
@@ -909,34 +1135,9 @@ namespace communication {
         sendMessage(messagePacket);
     }
 
-    //% block="al recibir un $evento de difusion de $emisor"
-    //% group="Eventos de Difusion"
-    //% draggableParameters="reporter"
-    //% weight=50
-    export function onReceivedEventBroadcast(handler: (evento: string, emisor: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (messagePacket.type === MessageType.BroadcastEvent) {
-                handler(messagePacket.event, messagePacket.sender);
-            }
-        });
-    }
-
-    //% block="al recibir un $evento de difusion de $sender"
-    //% sender.shadow=device_field
-    //% group="Eventos de Difusion"
-    //% draggableParameters="reporter"
-    //% weight=40
-    export function onReceivedEventBroadcastFrom(sender: string, handler: (evento: string) => void) {
-        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (messagePacket.type === MessageType.BroadcastEvent && messagePacket.sender === sender) {
-                handler(messagePacket.event);
-            }
-        });
-    }
-
     //% block="al recibir el evento $event de difusion de $emisor"
     //% event.shadow=event_field
-    //% group="Eventos de Difusion"
+    //% group="Eventos por Difusion"
     //% draggableParameters="reporter"
     //% weight=30
     export function onReceivedEventBroadcastWithEvent(event: string, handler: (emisor: string) => void) {
@@ -950,7 +1151,7 @@ namespace communication {
     //% block="al recibir el evento $event difusion de $sender"
     //% sender.shadow=device_field
     //% event.shadow=event_field
-    //% group="Eventos de Difusion"
+    //% group="Eventos por Difusion"
     //% draggableParameters="reporter"
     //% weight=20
     export function onReceivedEventBroadcastFromWithEvent(sender: string, event: string, handler: () => void) {
