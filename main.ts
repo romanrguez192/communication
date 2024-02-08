@@ -5,6 +5,75 @@ namespace communication {
     radio.setGroup(1);
     radio.setTransmitSerialNumber(true);
 
+    interface Task {
+        id: number;
+        callback: () => void;
+        interval: number;
+        lastRun: number;
+        repeat: boolean;
+        active: boolean;
+    }
+
+    let tasks: Task[] = [];
+    let nextTaskId = 0;
+
+    function runTasks() {
+        control.inBackground(() => {
+            while (true) {
+                let currentTime = input.runningTime();
+                for (let task of tasks) {
+                    if (task.active && currentTime >= task.lastRun + task.interval) {
+                        task.callback();
+                        task.lastRun = currentTime;
+                        if (!task.repeat) {
+                            task.active = false;
+                        }
+                    }
+                }
+                tasks = tasks.filter((t) => t.active);
+                basic.pause(50);
+            }
+        });
+    }
+
+    function addTask(callback: () => void, delay: number, repeat: boolean): number {
+        let task: Task = {
+            id: nextTaskId++,
+            callback: callback,
+            interval: delay,
+            lastRun: input.runningTime(),
+            repeat: repeat,
+            active: true,
+        };
+        tasks.push(task);
+        return task.id;
+    }
+
+    function clearIntervalOrTimeout(taskId: number) {
+        let task = tasks.find((t) => t.id === taskId);
+        if (task) {
+            task.active = false;
+        }
+    }
+
+    function setInterval(callback: () => void, delay = 0): number {
+        return addTask(callback, delay, true);
+    }
+
+    function setTimeout(callback: () => void, delay = 0): number {
+        return addTask(callback, delay, false);
+    }
+
+    function clearInterval(taskId: number): void {
+        clearIntervalOrTimeout(taskId);
+    }
+
+    function clearTimeout(taskId: number): void {
+        clearIntervalOrTimeout(taskId);
+    }
+
+    runTasks();
+
     namespace betterRadio {
         const PACKET_SIZE = 15;
         let messageId = 0;
@@ -57,18 +126,14 @@ namespace communication {
         const listeners: ((receivedString: string) => void)[] = [];
 
         function removeExpiredPackets(senderId: number, messageId: number) {
-            control.setInterval(
-                function () {
-                    if (receivedPackets[senderId] && receivedPackets[senderId][messageId]) {
-                        delete receivedPackets[senderId][messageId];
-                        if (Object.keys(receivedPackets[senderId]).length === 0) {
-                            delete receivedPackets[senderId];
-                        }
+            setTimeout(function () {
+                if (receivedPackets[senderId] && receivedPackets[senderId][messageId]) {
+                    delete receivedPackets[senderId][messageId];
+                    if (Object.keys(receivedPackets[senderId]).length === 0) {
+                        delete receivedPackets[senderId];
                     }
-                },
-                8000,
-                control.IntervalMode.Timeout
-            );
+                }
+            }, 8000);
         }
 
         radio.onReceivedBuffer(function (receivedBuffer) {
@@ -306,10 +371,10 @@ namespace communication {
         }
     }
 
-    control.setInterval(sendDiscoveryMessage, DISCOVERY_INTERVAL, control.IntervalMode.Interval);
-    control.setInterval(removeInactiveDevices, CHECK_INTERVAL, control.IntervalMode.Interval);
+    setInterval(sendDiscoveryMessage, DISCOVERY_INTERVAL);
+    setInterval(removeInactiveDevices, CHECK_INTERVAL);
 
-    sendDiscoveryMessage();
+    setTimeout(sendDiscoveryMessage);
 
     const acknowledgements: { [messageId: number]: { [deviceId: string]: boolean } } = {};
 
@@ -331,27 +396,19 @@ namespace communication {
 
                 acknowledgements[messageId][deviceId] = false;
 
-                const intervalId = control.setInterval(
-                    function () {
-                        if (!acknowledgements[messageId][deviceId]) {
-                            betterRadio.sendString(payload);
-                        }
-                    },
-                    300,
-                    control.IntervalMode.Interval
-                );
+                const intervalId = setInterval(function () {
+                    if (!acknowledgements[messageId][deviceId]) {
+                        betterRadio.sendString(payload);
+                    }
+                }, 300);
 
-                control.setInterval(
-                    function () {
-                        control.clearInterval(intervalId, control.IntervalMode.Interval);
-                        delete acknowledgements[messageId][deviceId];
-                        if (Object.keys(acknowledgements[messageId]).length === 0) {
-                            delete acknowledgements[messageId];
-                        }
-                    },
-                    3000,
-                    control.IntervalMode.Timeout
-                );
+                setTimeout(function () {
+                    clearInterval(intervalId);
+                    delete acknowledgements[messageId][deviceId];
+                    if (Object.keys(acknowledgements[messageId]).length === 0) {
+                        delete acknowledgements[messageId];
+                    }
+                }, 3000);
             }
         }
     }
@@ -407,6 +464,12 @@ namespace communication {
 
     const listeners: ((messagePacket: FullRegularMessagePacket) => void)[] = [];
 
+    function deleteAcknowledgedMessageById(messageId: number) {
+        setTimeout(function () {
+            delete acknowledgedMessages[messageId];
+        }, 8000);
+    }
+
     betterRadio.onReceivedString(function (receivedString: string) {
         const messagePacket: MessagePacket = JSON.parse(receivedString);
 
@@ -431,13 +494,7 @@ namespace communication {
 
         acknowledgedMessages[messageId] = true;
 
-        control.setInterval(
-            function () {
-                delete acknowledgedMessages[messageId];
-            },
-            8000,
-            control.IntervalMode.Timeout
-        );
+        deleteAcknowledgedMessageById(messageId);
 
         for (const listener of listeners) {
             listener(messagePacket);
