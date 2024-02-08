@@ -405,41 +405,47 @@ namespace communication {
         }
     }
 
+    const listeners: ((messagePacket: FullRegularMessagePacket) => void)[] = [];
+
+    betterRadio.onReceivedString(function (receivedString: string) {
+        const messagePacket: MessagePacket = JSON.parse(receivedString);
+
+        if (messagePacket.type === MessageType.Discovery || messagePacket.type === MessageType.Acknowledgement) {
+            return;
+        }
+
+        const messageId = messagePacket.id;
+
+        const acknowledgementPacket: AcknowledgementPacket = {
+            id: messageId,
+            type: MessageType.Acknowledgement,
+            deviceId: DEVICE_ID,
+            receiver: messagePacket.sender,
+        };
+
+        betterRadio.sendString(JSON.stringify(acknowledgementPacket));
+
+        if (acknowledgedMessages[messageId]) {
+            return;
+        }
+
+        acknowledgedMessages[messageId] = true;
+
+        control.setInterval(
+            function () {
+                delete acknowledgedMessages[messageId];
+            },
+            8000,
+            control.IntervalMode.Timeout
+        );
+
+        for (const listener of listeners) {
+            listener(messagePacket);
+        }
+    });
+
     function onMessageReceived(handler: (messagePacket: FullRegularMessagePacket) => void) {
-        betterRadio.onReceivedString(function (receivedString: string) {
-            const messagePacket: MessagePacket = JSON.parse(receivedString);
-
-            if (messagePacket.type === MessageType.Discovery || messagePacket.type === MessageType.Acknowledgement) {
-                return;
-            }
-
-            const messageId = messagePacket.id;
-
-            const acknowledgementPacket: AcknowledgementPacket = {
-                id: messageId,
-                type: MessageType.Acknowledgement,
-                deviceId: DEVICE_ID,
-                receiver: messagePacket.sender,
-            };
-
-            betterRadio.sendString(JSON.stringify(acknowledgementPacket));
-
-            if (acknowledgedMessages[messageId]) {
-                return;
-            }
-
-            acknowledgedMessages[messageId] = true;
-
-            control.setInterval(
-                function () {
-                    delete acknowledgedMessages[messageId];
-                },
-                8000,
-                control.IntervalMode.Timeout
-            );
-
-            handler(messagePacket);
-        });
+        listeners.push(handler);
     }
 
     // TODO: Consider removing this block and channels in general
