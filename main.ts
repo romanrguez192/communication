@@ -198,6 +198,8 @@ namespace communication {
         Direct,
         DirectValue,
         DirectEvent,
+        Request,
+        Response,
         Group,
         GroupValue,
         GroupEvent,
@@ -240,6 +242,19 @@ namespace communication {
         type: MessageType.DirectEvent;
         receiver: string;
         event: string;
+    }
+
+    interface RequestMessagePacket {
+        type: MessageType.Request;
+        receiver: string;
+        key: string;
+    }
+
+    interface ResponseMessagePacket {
+        type: MessageType.Response;
+        receiver: string;
+        key: string;
+        value: any;
     }
 
     interface GroupMessagePacket {
@@ -302,6 +317,8 @@ namespace communication {
         | DirectMessagePacket
         | DirectValueMessagePacket
         | DirectEventMessagePacket
+        | RequestMessagePacket
+        | ResponseMessagePacket
         | GroupMessagePacket
         | GroupValueMessagePacket
         | GroupEventMessagePacket
@@ -436,7 +453,9 @@ namespace communication {
             fullMessagePacket.type === MessageType.BarrierDirect ||
             fullMessagePacket.type === MessageType.Direct ||
             fullMessagePacket.type === MessageType.DirectValue ||
-            fullMessagePacket.type === MessageType.DirectEvent
+            fullMessagePacket.type === MessageType.DirectEvent ||
+            fullMessagePacket.type === MessageType.Request ||
+            fullMessagePacket.type === MessageType.Response
         ) {
             const { receiver } = fullMessagePacket;
             sendMessageWithAck(fullMessagePacket, (additionalInfo) => additionalInfo.deviceName === receiver);
@@ -486,6 +505,9 @@ namespace communication {
             receiver: messagePacket.sender,
         };
 
+        // TODO: A small issue is that I'm sending the acknowledgement even if it's not for me, right?
+        // TODO: Consider adding a check for the receiver
+
         betterRadio.sendString(JSON.stringify(acknowledgementPacket));
 
         if (acknowledgedMessages[messageId]) {
@@ -503,6 +525,13 @@ namespace communication {
 
     function onMessageReceived(handler: (messagePacket: FullRegularMessagePacket) => void) {
         listeners.push(handler);
+    }
+
+    function removeMessageReceivedHandler(handler: (messagePacket: FullRegularMessagePacket) => void) {
+        const index = listeners.indexOf(handler);
+        if (index !== -1) {
+            listeners.splice(index, 1);
+        }
     }
 
     // TODO: Consider removing this block and channels in general
@@ -906,6 +935,79 @@ namespace communication {
                 handler();
             }
         });
+    }
+
+    //% block="solicitar valor $key a $receiver"
+    //% key.defl="nombre"
+    //% receiver.shadow=device_field
+    //% group="Solicitudes"
+    //% weight=100
+    export function requestValue(receiver: string, key: string): any {
+        let value: any = null;
+
+        const messagePacket: RequestMessagePacket = {
+            type: MessageType.Request,
+            receiver,
+            key,
+        };
+
+        sendMessage(messagePacket);
+
+        const handler = function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.Response &&
+                messagePacket.receiver === myDeviceName &&
+                messagePacket.sender === receiver &&
+                messagePacket.key === key
+            ) {
+                value = messagePacket.value;
+            }
+        };
+
+        onMessageReceived(handler);
+
+        // TODO: Consider a timeout
+        while (value === null) {
+            basic.pause(100);
+        }
+
+        removeMessageReceivedHandler(handler);
+
+        return value;
+    }
+
+    //% block="al recibir una solicitud de $key de $emisor"
+    //% key.defl="nombre"
+    //% group="Solicitudes"
+    //% draggableParameters="reporter"
+    //% weight=90
+    export function onRequestReceived(key: string, handler: (emisor: string) => void) {
+        onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
+            if (
+                messagePacket.type === MessageType.Request &&
+                messagePacket.receiver === myDeviceName &&
+                messagePacket.key === key
+            ) {
+                handler(messagePacket.sender);
+            }
+        });
+    }
+
+    //% block="responder con valor $key = $value a $receiver"
+    //% key.defl="nombre"
+    //% value.shadow=math_number
+    //% receiver.shadow=device_field
+    //% group="Solicitudes"
+    //% weight=80
+    export function respondWithValue(receiver: string, key: string, value: any) {
+        const messagePacket: ResponseMessagePacket = {
+            type: MessageType.Response,
+            receiver,
+            key,
+            value,
+        };
+
+        sendMessage(messagePacket);
     }
 
     //% block="enviar mensaje $message al grupo $group"
