@@ -336,14 +336,12 @@ namespace communication {
     let myDeviceName = control.deviceName();
     const groupsJoined: string[] = [];
 
-    const DISCOVERY_INTERVAL = 5000;
-    const TIMEOUT_INTERVAL = 10000;
-    const CHECK_INTERVAL = 2500;
     const DEVICE_ID = control.deviceSerialNumber();
 
     interface Devices {
         [deviceId: string]: {
             lastSeen: number;
+            signalStrength: number;
             additionalInfo: DeviceInfo;
         };
     }
@@ -374,6 +372,7 @@ namespace communication {
         const { deviceId, additionalInfo } = message;
         activeDevices[deviceId] = {
             lastSeen: control.millis(),
+            signalStrength: radio.receivedPacket(RadioPacketProperty.SignalStrength),
             additionalInfo,
         };
     }
@@ -382,14 +381,14 @@ namespace communication {
         const currentTime = control.millis();
         const ids = Object.keys(activeDevices);
         for (const id of ids) {
-            if (currentTime - activeDevices[id].lastSeen > TIMEOUT_INTERVAL) {
+            if (currentTime - activeDevices[id].lastSeen > 10000) {
                 delete activeDevices[id];
             }
         }
     }
 
-    setInterval(sendDiscoveryMessage, DISCOVERY_INTERVAL);
-    setInterval(removeInactiveDevices, CHECK_INTERVAL);
+    setInterval(sendDiscoveryMessage, 5000);
+    setInterval(removeInactiveDevices, 2500);
 
     setTimeout(sendDiscoveryMessage);
 
@@ -1329,5 +1328,50 @@ namespace communication {
                 handler();
             }
         });
+    }
+
+    //% block="encontrar dispositivo mas cercano"
+    //% group="Proximidad"
+    //% weight=100
+    export function findClosestDevice(): string {
+        const devicesIds = Object.keys(activeDevices);
+        let closestDevice = "";
+        let closestSignalStrength = -1;
+
+        for (const deviceId of devicesIds) {
+            const signalStrength = activeDevices[deviceId].signalStrength;
+            if (signalStrength > closestSignalStrength) {
+                closestSignalStrength = signalStrength;
+                closestDevice = activeDevices[deviceId].additionalInfo.deviceName;
+            }
+        }
+
+        return closestDevice;
+    }
+
+    //% block="encontrar dispositivo mas cercano en el grupo $group"
+    //% group.shadow=group_field
+    //% group="Proximidad"
+    //% weight=90
+    export function findClosestDeviceInGroup(group: string): string {
+        if (groupsJoined.indexOf(group) === -1) {
+            return "";
+        }
+
+        const devicesIds = Object.keys(activeDevices);
+        let closestDevice = "";
+        let closestSignalStrength = -1;
+
+        for (const deviceId of devicesIds) {
+            if (activeDevices[deviceId].additionalInfo.groups.indexOf(group) !== -1) {
+                const signalStrength = activeDevices[deviceId].signalStrength;
+                if (signalStrength > closestSignalStrength) {
+                    closestSignalStrength = signalStrength;
+                    closestDevice = activeDevices[deviceId].additionalInfo.deviceName;
+                }
+            }
+        }
+
+        return closestDevice;
     }
 }
