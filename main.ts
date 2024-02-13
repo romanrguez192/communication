@@ -109,11 +109,12 @@ namespace communication {
                 packets.push(packet);
             }
 
+            messageId = (messageId + 1) % 65536;
+
             packets.forEach(function (packet) {
                 radio.sendBuffer(packet);
+                basic.pause(10);
             });
-
-            messageId = (messageId + 1) % 65536;
         }
 
         interface ReceivedPackets {
@@ -133,7 +134,7 @@ namespace communication {
                         delete receivedPackets[senderId];
                     }
                 }
-            }, 8000);
+            }, 1000);
         }
 
         radio.onReceivedBuffer(function (receivedBuffer) {
@@ -495,6 +496,14 @@ namespace communication {
             return;
         }
 
+        if ("receiver" in messagePacket && messagePacket.receiver !== myDeviceName) {
+            return;
+        }
+
+        if ("group" in messagePacket && groupsJoined.indexOf(messagePacket.group) === -1) {
+            return;
+        }
+
         const messageId = messagePacket.id;
 
         const acknowledgementPacket: AcknowledgementPacket = {
@@ -503,9 +512,6 @@ namespace communication {
             deviceId: DEVICE_ID,
             receiver: messagePacket.sender,
         };
-
-        // TODO: A small issue is that I'm sending the acknowledgement even if it's not for me, right?
-        // TODO: Consider adding a check for the receiver
 
         betterRadio.sendString(JSON.stringify(acknowledgementPacket));
 
@@ -517,6 +523,7 @@ namespace communication {
 
         deleteAcknowledgedMessageById(messageId);
 
+        // TODO: Consider scheduling the message to be processed in the next iteration of the event loop
         for (const listener of listeners) {
             listener(messagePacket);
         }
@@ -653,8 +660,8 @@ namespace communication {
 
     onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
         if (
-            (messagePacket.type === MessageType.BarrierDirect && messagePacket.receiver === myDeviceName) ||
-            (messagePacket.type === MessageType.BarrierGroup && groupsJoined.indexOf(messagePacket.group) !== -1) ||
+            messagePacket.type === MessageType.BarrierDirect ||
+            messagePacket.type === MessageType.BarrierGroup ||
             messagePacket.type === MessageType.BarrierBroadcast
         ) {
             const { barrierId, sender } = messagePacket;
@@ -802,7 +809,7 @@ namespace communication {
     //% weight=90
     export function onDirectMessageReceived(handler: (mensaje: any, emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (messagePacket.type === MessageType.Direct && messagePacket.receiver === myDeviceName) {
+            if (messagePacket.type === MessageType.Direct) {
                 handler(messagePacket.data, messagePacket.sender);
             }
         });
@@ -815,11 +822,7 @@ namespace communication {
     //% weight=85
     export function onDirectMessageReceivedFrom(sender: string, handler: (mensaje: any) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.Direct &&
-                messagePacket.receiver === myDeviceName &&
-                messagePacket.sender === sender
-            ) {
+            if (messagePacket.type === MessageType.Direct && messagePacket.sender === sender) {
                 handler(messagePacket.data);
             }
         });
@@ -848,11 +851,7 @@ namespace communication {
     //% weight=90
     export function onDirectValueReceived(key: string, handler: (valor: any, emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.DirectValue &&
-                messagePacket.receiver === myDeviceName &&
-                messagePacket.key === key
-            ) {
+            if (messagePacket.type === MessageType.DirectValue && messagePacket.key === key) {
                 handler(messagePacket.value, messagePacket.sender);
             }
         });
@@ -868,7 +867,6 @@ namespace communication {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.DirectValue &&
-                messagePacket.receiver === myDeviceName &&
                 messagePacket.sender === sender &&
                 messagePacket.key === key
             ) {
@@ -907,11 +905,7 @@ namespace communication {
     //% weight=20
     export function onDirectEventReceivedWithEvent(event: string, handler: (emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.DirectEvent &&
-                messagePacket.receiver === myDeviceName &&
-                messagePacket.event === event
-            ) {
+            if (messagePacket.type === MessageType.DirectEvent && messagePacket.event === event) {
                 handler(messagePacket.sender);
             }
         });
@@ -927,7 +921,6 @@ namespace communication {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.DirectEvent &&
-                messagePacket.receiver === myDeviceName &&
                 messagePacket.sender === sender &&
                 messagePacket.event === event
             ) {
@@ -955,7 +948,6 @@ namespace communication {
         const handler = function (messagePacket: FullRegularMessagePacket) {
             if (
                 messagePacket.type === MessageType.Response &&
-                messagePacket.receiver === myDeviceName &&
                 messagePacket.sender === receiver &&
                 messagePacket.key === key
             ) {
@@ -982,11 +974,7 @@ namespace communication {
     //% weight=90
     export function onRequestReceived(key: string, handler: (emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.Request &&
-                messagePacket.receiver === myDeviceName &&
-                messagePacket.key === key
-            ) {
+            if (messagePacket.type === MessageType.Request && messagePacket.key === key) {
                 handler(messagePacket.sender);
             }
         });
@@ -1035,11 +1023,7 @@ namespace communication {
     //% weight=90
     export function onReceivedMessageFromGroup(group: string, handler: (mensaje: any, emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.Group &&
-                messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1
-            ) {
+            if (messagePacket.type === MessageType.Group && messagePacket.group === group) {
                 handler(messagePacket.data, messagePacket.sender);
             }
         });
@@ -1056,7 +1040,6 @@ namespace communication {
             if (
                 messagePacket.type === MessageType.Group &&
                 messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
                 messagePacket.sender === sender
             ) {
                 handler(messagePacket.data);
@@ -1100,7 +1083,6 @@ namespace communication {
             if (
                 messagePacket.type === MessageType.GroupValue &&
                 messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
                 messagePacket.key === key
             ) {
                 handler(messagePacket.value, messagePacket.sender);
@@ -1125,7 +1107,6 @@ namespace communication {
             if (
                 messagePacket.type === MessageType.GroupValue &&
                 messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
                 messagePacket.sender === sender &&
                 messagePacket.key === key
             ) {
@@ -1164,7 +1145,6 @@ namespace communication {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
                 messagePacket.event === event
             ) {
                 handler(messagePacket.sender);
@@ -1189,7 +1169,6 @@ namespace communication {
             if (
                 messagePacket.type === MessageType.GroupEvent &&
                 messagePacket.group === group &&
-                groupsJoined.indexOf(group) !== -1 &&
                 messagePacket.sender === sender &&
                 messagePacket.event === event
             ) {
@@ -1215,7 +1194,7 @@ namespace communication {
     //% group="Mensajes por Difusion"
     //% draggableParameters="reporter"
     //% weight=90
-    export function onReceivedBroadcast(handler: (mensaje: string, emisor: string) => void) {
+    export function onReceivedBroadcast(handler: (mensaje: any, emisor: string) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
             if (messagePacket.type === MessageType.Broadcast) {
                 handler(messagePacket.data, messagePacket.sender);
@@ -1228,13 +1207,9 @@ namespace communication {
     //% group="Mensajes por Difusion"
     //% draggableParameters="reporter"
     //% weight=85
-    export function onReceivedBroadcastFrom(sender: string, handler: (mensaje: string) => void) {
+    export function onReceivedBroadcastFrom(sender: string, handler: (mensaje: any) => void) {
         onMessageReceived(function (messagePacket: FullRegularMessagePacket) {
-            if (
-                messagePacket.type === MessageType.Broadcast &&
-                messagePacket.sender === sender &&
-                typeof messagePacket.data === "string"
-            ) {
+            if (messagePacket.type === MessageType.Broadcast && messagePacket.sender === sender) {
                 handler(messagePacket.data);
             }
         });
