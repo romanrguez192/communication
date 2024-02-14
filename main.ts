@@ -337,8 +337,6 @@ namespace communication {
     let myDeviceName = control.deviceName();
     const groupsJoined: string[] = [];
 
-    const DEVICE_ID = control.deviceSerialNumber();
-
     interface Devices {
         [deviceId: string]: {
             lastSeen: number;
@@ -352,7 +350,7 @@ namespace communication {
     function sendDiscoveryMessage() {
         const discoveryMessage: DiscoveryMessagePacket = {
             type: MessageType.Discovery,
-            deviceId: DEVICE_ID,
+            deviceId: control.deviceSerialNumber(),
             additionalInfo: {
                 deviceName: myDeviceName,
                 groups: groupsJoined,
@@ -496,11 +494,11 @@ namespace communication {
             return;
         }
 
-        if ("receiver" in messagePacket && messagePacket.receiver !== myDeviceName) {
+        if ((messagePacket as any).receiver !== undefined && (messagePacket as any).receiver !== myDeviceName) {
             return;
         }
 
-        if ("group" in messagePacket && groupsJoined.indexOf(messagePacket.group) === -1) {
+        if ((messagePacket as any).group !== undefined && groupsJoined.indexOf((messagePacket as any).group) === -1) {
             return;
         }
 
@@ -509,7 +507,7 @@ namespace communication {
         const acknowledgementPacket: AcknowledgementPacket = {
             id: messageId,
             type: MessageType.Acknowledgement,
-            deviceId: DEVICE_ID,
+            deviceId: control.deviceSerialNumber(),
             receiver: messagePacket.sender,
         };
 
