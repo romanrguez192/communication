@@ -209,86 +209,97 @@ namespace communication {
         BroadcastEvent,
     }
 
-    interface BarrierDirectPacket {
+    export enum ConfirmationType {
+        //% block="con confirmacion"
+        True = 1,
+        //% block="sin confirmacion"
+        False = 0,
+    }
+
+    interface MessageWithConfirmation {
+        confirmation: ConfirmationType;
+    }
+
+    interface BarrierDirectPacket extends MessageWithConfirmation {
         type: MessageType.BarrierDirect;
         barrierId: string;
         receiver: string;
     }
 
-    interface BarrierGroupPacket {
+    interface BarrierGroupPacket extends MessageWithConfirmation {
         type: MessageType.BarrierGroup;
         barrierId: string;
         group: string;
     }
 
-    interface BarrierBroadcastPacket {
+    interface BarrierBroadcastPacket extends MessageWithConfirmation {
         type: MessageType.BarrierBroadcast;
         barrierId: string;
     }
 
-    interface DirectMessagePacket {
+    interface DirectMessagePacket extends MessageWithConfirmation {
         type: MessageType.Direct;
         receiver: string;
         data: any;
     }
 
-    interface DirectValueMessagePacket {
+    interface DirectValueMessagePacket extends MessageWithConfirmation {
         type: MessageType.DirectValue;
         receiver: string;
         key: string;
         value: any;
     }
 
-    interface DirectEventMessagePacket {
+    interface DirectEventMessagePacket extends MessageWithConfirmation {
         type: MessageType.DirectEvent;
         receiver: string;
         event: string;
     }
 
-    interface RequestMessagePacket {
+    interface RequestMessagePacket extends MessageWithConfirmation {
         type: MessageType.Request;
         receiver: string;
         key: string;
     }
 
-    interface ResponseMessagePacket {
+    interface ResponseMessagePacket extends MessageWithConfirmation {
         type: MessageType.Response;
         receiver: string;
         key: string;
         value: any;
     }
 
-    interface GroupMessagePacket {
+    interface GroupMessagePacket extends MessageWithConfirmation {
         type: MessageType.Group;
         group: string;
         data: any;
     }
 
-    interface GroupValueMessagePacket {
+    interface GroupValueMessagePacket extends MessageWithConfirmation {
         type: MessageType.GroupValue;
         group: string;
         key: string;
         value: any;
     }
 
-    interface GroupEventMessagePacket {
+    interface GroupEventMessagePacket extends MessageWithConfirmation {
         type: MessageType.GroupEvent;
         group: string;
         event: string;
     }
 
-    interface BroadcastMessagePacket {
+    interface BroadcastMessagePacket extends MessageWithConfirmation {
         type: MessageType.Broadcast;
         data: any;
     }
 
-    interface BroadcastValueMessagePacket {
+    interface BroadcastValueMessagePacket extends MessageWithConfirmation {
         type: MessageType.BroadcastValue;
         key: string;
         value: any;
     }
 
-    interface BroadcastEventMessagePacket {
+    interface BroadcastEventMessagePacket extends MessageWithConfirmation {
         type: MessageType.BroadcastEvent;
         event: string;
     }
@@ -328,7 +339,7 @@ namespace communication {
         | BroadcastEventMessagePacket;
 
     type FullRegularMessagePacket = RegularMessagePacket & {
-        id: number;
+        id?: number;
         sender: string;
     };
 
@@ -444,8 +455,14 @@ namespace communication {
 
     function sendMessage(messagePacket: RegularMessagePacket) {
         const fullMessagePacket = messagePacket as FullRegularMessagePacket;
-        fullMessagePacket.id = control.micros();
         fullMessagePacket.sender = myDeviceName;
+
+        if (messagePacket.confirmation === ConfirmationType.False) {
+            betterRadio.sendString(JSON.stringify(fullMessagePacket));
+            return;
+        }
+
+        fullMessagePacket.id = control.micros();
 
         if (
             fullMessagePacket.type === MessageType.BarrierDirect ||
@@ -502,24 +519,26 @@ namespace communication {
             return;
         }
 
-        const messageId = messagePacket.id;
+        if (messagePacket.confirmation === ConfirmationType.True) {
+            const messageId = messagePacket.id;
 
-        const acknowledgementPacket: AcknowledgementPacket = {
-            id: messageId,
-            type: MessageType.Acknowledgement,
-            deviceId: control.deviceSerialNumber(),
-            receiver: messagePacket.sender,
-        };
+            const acknowledgementPacket: AcknowledgementPacket = {
+                id: messageId,
+                type: MessageType.Acknowledgement,
+                deviceId: control.deviceSerialNumber(),
+                receiver: messagePacket.sender,
+            };
 
-        betterRadio.sendString(JSON.stringify(acknowledgementPacket));
+            betterRadio.sendString(JSON.stringify(acknowledgementPacket));
 
-        if (acknowledgedMessages[messageId]) {
-            return;
+            if (acknowledgedMessages[messageId]) {
+                return;
+            }
+
+            acknowledgedMessages[messageId] = true;
+
+            deleteAcknowledgedMessageById(messageId);
         }
-
-        acknowledgedMessages[messageId] = true;
-
-        deleteAcknowledgedMessageById(messageId);
 
         // TODO: Consider scheduling the message to be processed in the next iteration of the event loop
         for (const listener of listeners) {
@@ -687,6 +706,7 @@ namespace communication {
             type: MessageType.BarrierDirect,
             receiver: deviceName,
             barrierId,
+            confirmation: ConfirmationType.True,
         };
 
         sendMessage(messagePacket);
@@ -724,6 +744,7 @@ namespace communication {
             type: MessageType.BarrierGroup,
             group,
             barrierId,
+            confirmation: ConfirmationType.True,
         };
 
         sendMessage(messagePacket);
@@ -768,6 +789,7 @@ namespace communication {
         const messagePacket: BarrierBroadcastPacket = {
             type: MessageType.BarrierBroadcast,
             barrierId,
+            confirmation: ConfirmationType.True,
         };
 
         sendMessage(messagePacket);
@@ -787,16 +809,22 @@ namespace communication {
         delete barrierReached[barrierId];
     }
 
-    //% block="enviar mensaje $message a $receiver"
+    //% block="enviar mensaje $message a $receiver || $confirmation"
     //% message.shadow=text message.defl="hola"
     //% receiver.shadow=device_field receiver.defl="nombre"
+    //% expandableArgumentMode="toggle"
     //% group="Mensajes Directos"
     //% weight=100
-    export function sendDirectMessage(receiver: string, message: any) {
+    export function sendDirectMessage(
+        receiver: string,
+        message: any,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         const messagePacket: DirectMessagePacket = {
             type: MessageType.Direct,
             data: message,
             receiver,
+            confirmation,
         };
         sendMessage(messagePacket);
     }
@@ -826,18 +854,25 @@ namespace communication {
         });
     }
 
-    //% block="enviar valor $key = $value a $receiver"
+    //% block="enviar valor $key = $value a $receiver || $confirmation"
     //% key.defl="nombre"
     //% value.shadow=math_number
     //% receiver.shadow=device_field
+    //% expandableArgumentMode="toggle"
     //% group="Valores Directos"
     //% weight=100
-    export function sendDirectValue(receiver: string, key: string, value: any) {
+    export function sendDirectValue(
+        receiver: string,
+        key: string,
+        value: any,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         const messagePacket: DirectValueMessagePacket = {
             type: MessageType.DirectValue,
             receiver,
             key,
             value,
+            confirmation,
         };
         sendMessage(messagePacket);
     }
@@ -882,16 +917,22 @@ namespace communication {
         return event;
     }
 
-    //% block="enviar evento $event a $receiver"
+    //% block="enviar evento $event a $receiver || $confirmation"
     //% event.defl="evento" receiver.defl="nombre"
     //% receiver.shadow=device_field event.shadow=event_field
+    //% expandableArgumentMode="toggle"
     //% group="Eventos Directos"
     //% weight=50
-    export function sendDirectEvent(receiver: string, event: string) {
+    export function sendDirectEvent(
+        receiver: string,
+        event: string,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         const messagePacket: DirectEventMessagePacket = {
             type: MessageType.DirectEvent,
             receiver,
             event,
+            confirmation,
         };
         sendMessage(messagePacket);
     }
@@ -939,6 +980,7 @@ namespace communication {
             type: MessageType.Request,
             receiver,
             key,
+            confirmation: ConfirmationType.True,
         };
 
         sendMessage(messagePacket);
@@ -990,17 +1032,23 @@ namespace communication {
             receiver,
             key,
             value,
+            confirmation: ConfirmationType.True,
         };
 
         sendMessage(messagePacket);
     }
 
-    //% block="enviar mensaje $message al grupo $group"
+    //% block="enviar mensaje $message al grupo $group || $confirmation"
     //% message.shadow=text message.defl="hola"
     //% group.shadow=group_field
+    //% expandableArgumentMode="toggle"
     //% group="Mensajes de Grupo"
     //% weight=100
-    export function sendMessageToGroup(group: string, message: any) {
+    export function sendMessageToGroup(
+        group: string,
+        message: any,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         if (groupsJoined.indexOf(group) === -1) {
             return;
         }
@@ -1009,6 +1057,7 @@ namespace communication {
             type: MessageType.Group,
             data: message,
             group,
+            confirmation,
         };
 
         sendMessage(messagePacket);
@@ -1045,13 +1094,19 @@ namespace communication {
         });
     }
 
-    //% block="enviar valor $key = $value al grupo $group"
+    //% block="enviar valor $key = $value al grupo $group || $confirmation"
     //% key.defl="nombre"
     //% value.shadow=math_number
     //% group.shadow=group_field
+    //% expandableArgumentMode="toggle"
     //% group="Valores de Grupo"
     //% weight=100
-    export function sendValueToGroup(group: string, key: string, value: any) {
+    export function sendValueToGroup(
+        group: string,
+        key: string,
+        value: any,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         if (groupsJoined.indexOf(group) === -1) {
             return;
         }
@@ -1061,6 +1116,7 @@ namespace communication {
             group,
             key,
             value,
+            confirmation,
         };
 
         sendMessage(messagePacket);
@@ -1113,12 +1169,17 @@ namespace communication {
         });
     }
 
-    //% block="enviar evento $event al grupo $group"
+    //% block="enviar evento $event al grupo $group || $confirmation"
     //% event.defl="evento"
     //% group.shadow=group_field
+    //% expandableArgumentMode="toggle"
     //% group="Eventos de Grupo"
     //% weight=60
-    export function sendEventToGroup(group: string, event: string) {
+    export function sendEventToGroup(
+        group: string,
+        event: string,
+        confirmation: ConfirmationType = ConfirmationType.True
+    ) {
         if (groupsJoined.indexOf(group) === -1) {
             return;
         }
@@ -1127,6 +1188,7 @@ namespace communication {
             type: MessageType.GroupEvent,
             group,
             event,
+            confirmation,
         };
 
         sendMessage(messagePacket);
@@ -1175,14 +1237,16 @@ namespace communication {
         });
     }
 
-    //% block="enviar mensaje $message por difusion"
+    //% block="enviar mensaje $message por difusion || $confirmation"
     //% message.shadow=text message.defl="hola"
+    //% expandableArgumentMode="toggle"
     //% group="Mensajes por Difusion"
     //% weight=100
-    export function broadcastMessage(message: any) {
+    export function broadcastMessage(message: any, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastMessagePacket = {
             type: MessageType.Broadcast,
             data: message,
+            confirmation,
         };
 
         sendMessage(messagePacket);
@@ -1213,16 +1277,18 @@ namespace communication {
         });
     }
 
-    //% block="enviar valor $key = $value por difusion"
+    //% block="enviar valor $key = $value por difusion || $confirmation"
     //% key.defl="nombre"
     //% value.shadow=math_number
+    //% expandableArgumentMode="toggle"
     //% group="Valores por Difusion"
     //% weight=100
-    export function broadcastValue(key: string, value: any) {
+    export function broadcastValue(key: string, value: any, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastValueMessagePacket = {
             type: MessageType.BroadcastValue,
             key,
             value,
+            confirmation,
         };
 
         sendMessage(messagePacket);
@@ -1259,14 +1325,16 @@ namespace communication {
         });
     }
 
-    //% block="enviar evento $event por difusion"
+    //% block="enviar evento $event por difusion || $confirmation"
     //% event.defl="evento"
+    //% expandableArgumentMode="toggle"
     //% group="Eventos por Difusion"
     //% weight=60
-    export function broadcastEvent(event: string) {
+    export function broadcastEvent(event: string, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastEventMessagePacket = {
             type: MessageType.BroadcastEvent,
             event,
+            confirmation,
         };
 
         sendMessage(messagePacket);
