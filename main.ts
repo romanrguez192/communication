@@ -590,6 +590,7 @@ namespace communication {
     //% block="unirse al grupo $group"
     //% group.shadow=group_field
     //% group="Configuracion"
+    //% subcategory="Grupos"
     //% weight=90
     export function joinGroup(group: string) {
         if (groupsJoined.indexOf(group) === -1) {
@@ -601,6 +602,7 @@ namespace communication {
     //% block="salir del grupo $group"
     //% group.shadow=group_field
     //% group="Configuracion"
+    //% subcategory="Grupos"
     //% weight=80
     export function leaveGroup(group: string) {
         const index = groupsJoined.indexOf(group);
@@ -619,7 +621,7 @@ namespace communication {
         return device;
     }
 
-    //% block="esperar por $numberOfDevices dispositivos conectados"
+    //% block="esperar que $numberOfDevices dispositivos se conecten"
     //% numberOfDevices.defl=2
     //% group="Sincronizacion"
     //% weight=100
@@ -632,7 +634,7 @@ namespace communication {
         }
     }
 
-    //% block="esperar por $deviceName conectado"
+    //% block="esperar que $deviceName se conecte"
     //% deviceName.shadow=device_field deviceName.defl="nombre"
     //% group="Sincronizacion"
     //% weight=90
@@ -648,10 +650,11 @@ namespace communication {
         }
     }
 
-    //% block="esperar por $numberOfDevices dispositivos conectados en el grupo $group"
+    //% block="esperar que $numberOfDevices dispositivos se conecten en el grupo $group"
     //% numberOfDevices.defl=2
     //% group.shadow=group_field group.defl="grupo"
     //% group="Sincronizacion"
+    //% subcategory="Grupos"
     //% weight=80
     export function waitForDevicesInGroup(numberOfDevices: number, group: string) {
         if (groupsJoined.indexOf(group) === -1) {
@@ -728,6 +731,7 @@ namespace communication {
     //% group.shadow=group_field group.defl="grupo"
     //% barrierId.defl="reunion2"
     //% group="Sincronizacion"
+    //% subcategory="Grupos"
     //% weight=60
     export function synchronizationBarrierGroup(group: string, barrierId: string) {
         if (groupsJoined.indexOf(group) === -1) {
@@ -778,6 +782,7 @@ namespace communication {
     //% block="esperar por todos en el punto de encuentro $barrierId"
     //% barrierId.defl="reunion3"
     //% group="Sincronizacion"
+    //% subcategory="Difusion"
     //% weight=50
     export function synchronizationBarrierBroadcast(barrierId: string) {
         if (!barrierReached[barrierId]) {
@@ -859,6 +864,7 @@ namespace communication {
     //% value.shadow=math_number
     //% receiver.shadow=device_field
     //% expandableArgumentMode="toggle"
+    //% inlineInputMode=inline
     //% group="Valores Directos"
     //% weight=100
     export function sendDirectValue(
@@ -1043,6 +1049,7 @@ namespace communication {
     //% group.shadow=group_field
     //% expandableArgumentMode="toggle"
     //% group="Mensajes de Grupo"
+    //% subcategory="Grupos"
     //% weight=100
     export function sendMessageToGroup(
         group: string,
@@ -1066,6 +1073,7 @@ namespace communication {
     //% block="al recibir un $mensaje de $emisor en el grupo $group"
     //% group.shadow=group_field
     //% group="Mensajes de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedMessageFromGroup(group: string, handler: (mensaje: any, emisor: string) => void) {
@@ -1080,6 +1088,7 @@ namespace communication {
     //% sender.shadow=device_field
     //% group.shadow=group_field
     //% group="Mensajes de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=85
     export function onReceivedMessageFromGroupFrom(group: string, sender: string, handler: (mensaje: any) => void) {
@@ -1099,7 +1108,9 @@ namespace communication {
     //% value.shadow=math_number
     //% group.shadow=group_field
     //% expandableArgumentMode="toggle"
+    //% inlineInputMode=inline
     //% group="Valores de Grupo"
+    //% subcategory="Grupos"
     //% weight=100
     export function sendValueToGroup(
         group: string,
@@ -1126,6 +1137,7 @@ namespace communication {
     //% key.defl="nombre"
     //% group.shadow=group_field
     //% group="Valores de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedValueFromGroup(
@@ -1149,6 +1161,7 @@ namespace communication {
     //% sender.shadow=device_field
     //% group.shadow=group_field
     //% group="Valores de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=80
     export function onReceivedValueFromGroupFrom(
@@ -1174,6 +1187,7 @@ namespace communication {
     //% group.shadow=group_field
     //% expandableArgumentMode="toggle"
     //% group="Eventos de Grupo"
+    //% subcategory="Grupos"
     //% weight=60
     export function sendEventToGroup(
         group: string,
@@ -1198,6 +1212,7 @@ namespace communication {
     //% event.shadow=event_field
     //% group.shadow=group_field
     //% group="Eventos de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=30
     export function onReceivedEventFromGroupWithEvent(group: string, event: string, handler: (emisor: string) => void) {
@@ -1217,6 +1232,7 @@ namespace communication {
     //% event.shadow=event_field
     //% group.shadow=group_field
     //% group="Eventos de Grupo"
+    //% subcategory="Grupos"
     //% draggableParameters="reporter"
     //% weight=20
     export function onReceivedEventFromGroupFromWithEvent(
@@ -1241,6 +1257,7 @@ namespace communication {
     //% message.shadow=text message.defl="hola"
     //% expandableArgumentMode="toggle"
     //% group="Mensajes por Difusion"
+    //% subcategory="Difusion"
     //% weight=100
     export function broadcastMessage(message: any, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastMessagePacket = {
@@ -1254,6 +1271,7 @@ namespace communication {
 
     //% block="al recibir un $mensaje de $emisor por difusion"
     //% group="Mensajes por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedBroadcast(handler: (mensaje: any, emisor: string) => void) {
@@ -1267,6 +1285,7 @@ namespace communication {
     //% block="al recibir un $mensaje de $sender por difusion"
     //% sender.shadow=device_field
     //% group="Mensajes por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=85
     export function onReceivedBroadcastFrom(sender: string, handler: (mensaje: any) => void) {
@@ -1282,6 +1301,7 @@ namespace communication {
     //% value.shadow=math_number
     //% expandableArgumentMode="toggle"
     //% group="Valores por Difusion"
+    //% subcategory="Difusion"
     //% weight=100
     export function broadcastValue(key: string, value: any, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastValueMessagePacket = {
@@ -1297,6 +1317,7 @@ namespace communication {
     //% block="al recibir $key de $emisor por difusion con $valor"
     //% key.defl="nombre"
     //% group="Valores por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=90
     export function onReceivedValueBroadcast(key: string, handler: (valor: any, emisor: string) => void) {
@@ -1311,6 +1332,7 @@ namespace communication {
     //% key.defl="nombre"
     //% sender.shadow=device_field
     //% group="Valores por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=80
     export function onReceivedValueBroadcastFrom(sender: string, key: string, handler: (valor: any) => void) {
@@ -1329,6 +1351,7 @@ namespace communication {
     //% event.defl="evento"
     //% expandableArgumentMode="toggle"
     //% group="Eventos por Difusion"
+    //% subcategory="Difusion"
     //% weight=60
     export function broadcastEvent(event: string, confirmation: ConfirmationType = ConfirmationType.True) {
         const messagePacket: BroadcastEventMessagePacket = {
@@ -1340,9 +1363,10 @@ namespace communication {
         sendMessage(messagePacket);
     }
 
-    //% block="al recibir el evento $event de difusion de $emisor"
+    //% block="al recibir el evento $event por difusion de $emisor"
     //% event.shadow=event_field
     //% group="Eventos por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=30
     export function onReceivedEventBroadcastWithEvent(event: string, handler: (emisor: string) => void) {
@@ -1353,10 +1377,11 @@ namespace communication {
         });
     }
 
-    //% block="al recibir el evento $event difusion de $sender"
+    //% block="al recibir el evento $event por difusion de $sender"
     //% sender.shadow=device_field
     //% event.shadow=event_field
     //% group="Eventos por Difusion"
+    //% subcategory="Difusion"
     //% draggableParameters="reporter"
     //% weight=20
     export function onReceivedEventBroadcastFromWithEvent(sender: string, event: string, handler: () => void) {
@@ -1371,7 +1396,7 @@ namespace communication {
         });
     }
 
-    //% block="encontrar dispositivo mas cercano"
+    //% block="dispositivo mas cercano"
     //% group="Proximidad"
     //% weight=100
     export function findClosestDevice(): string {
@@ -1390,9 +1415,10 @@ namespace communication {
         return closestDevice;
     }
 
-    //% block="encontrar dispositivo mas cercano en el grupo $group"
+    //% block="dispositivo mas cercano del grupo $group"
     //% group.shadow=group_field
     //% group="Proximidad"
+    //% subcategory="Grupos"
     //% weight=90
     export function findClosestDeviceInGroup(group: string): string {
         if (groupsJoined.indexOf(group) === -1) {
